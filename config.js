@@ -375,6 +375,13 @@ var config = {
     //    resizeDesktopForPresenter: false
     // },
 
+    // Notification timeouts
+    // notificationTimeouts: {
+    //     short: 2500,
+    //     medium: 5000,
+    //     long: 10000
+    // },
+
     // // Options for the recording limit notification.
     // recordingLimit: {
     //
@@ -431,7 +438,10 @@ var config = {
     // hideLobbyButton: false,
 
     // If Lobby is enabled starts knocking automatically.
-    // autoKnockLobby: false
+    // autoKnockLobby: false,
+
+    // Hides add breakout room button
+    // hideAddRoomButton: false,
 
     // Require users to always specify a display name.
     // requireDisplayName: true,
@@ -455,6 +465,12 @@ var config = {
     // Setting this to null, will also disable showing the remote videos
     // when the toolbar is shown on mouse movements
     // disable1On1Mode: null | false | true,
+
+    // Default local name to be displayed
+    // defaultLocalDisplayName: 'me',
+
+    // Default remote name to be displayed
+    // defaultRemoteDisplayName: 'Fellow Jitster',
 
     // Default language for the user interface.
     // defaultLanguage: 'en',
@@ -653,7 +669,7 @@ var config = {
     // enableEmailInStats: false,
 
     // Enables detecting faces of participants and get their expression and send it to other participants
-    // enableFaceRecognition: true,
+    // enableFacialRecognition: true,
 
     // Controls the percentage of automatic feedback shown to participants when callstats is enabled.
     // The default value is 100%. If set to 0, no automatic feedback will be requested
@@ -737,7 +753,7 @@ var config = {
         // module connects to the provided rtcstatsEndpoint and sends statistics regarding
         // PeerConnection states along with getStats metrics polled at the specified
         // interval.
-        // rtcstatsEnabled: true,
+        // rtcstatsEnabled: false,
 
         // In order to enable rtcstats one needs to provide a endpoint url.
         // rtcstatsEndpoint: wss://rtcstats-server-pilot.jitsi.net/,

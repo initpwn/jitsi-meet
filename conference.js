@@ -29,6 +29,7 @@ import { shouldShowModeratedNotification } from './react/features/av-moderation/
 import {
     AVATAR_URL_COMMAND,
     EMAIL_COMMAND,
+    _conferenceWillJoin,
     authStatusChanged,
     commonUserJoinedHandling,
     commonUserLeftHandling,
@@ -47,7 +48,7 @@ import {
     onStartMutedPolicyChanged,
     p2pStatusChanged,
     sendLocalParticipant,
-    _conferenceWillJoin
+    nonParticipantMessageReceived
 } from './react/features/base/conference';
 import { getReplaceParticipant } from './react/features/base/config/functions';
 import {
@@ -85,7 +86,6 @@ import {
     dominantSpeakerChanged,
     getLocalParticipant,
     getNormalizedDisplayName,
-    getParticipantById,
     localParticipantConnectionStatusChanged,
     localParticipantRoleChanged,
     participantConnectionStatusChanged,
@@ -122,7 +122,11 @@ import {
     maybeOpenFeedbackDialog,
     submitFeedback
 } from './react/features/feedback';
-import { isModerationNotificationDisplayed, showNotification } from './react/features/notifications';
+import {
+    isModerationNotificationDisplayed,
+    showNotification,
+    NOTIFICATION_TIMEOUT_TYPE
+} from './react/features/notifications';
 import { mediaPermissionPromptVisibilityChanged, toggleSlowGUMOverlay } from './react/features/overlay';
 import { suspendDetected } from './react/features/power-monitor';
 import {
@@ -228,17 +232,6 @@ function sendData(command, value) {
 
     room.removeCommand(command);
     room.sendCommand(command, { value });
-}
-
-/**
- * Get user nickname by user id.
- * @param {string} id user id
- * @returns {string?} user nickname or undefined if user is unknown.
- */
-function getDisplayName(id) {
-    const participant = getParticipantById(APP.store.getState(), id);
-
-    return participant && participant.name;
 }
 
 /**
@@ -356,7 +349,10 @@ class ConferenceConnector {
         case JitsiConferenceErrors.FOCUS_DISCONNECTED: {
             const [ focus, retrySec ] = params;
 
-            APP.UI.notifyFocusDisconnected(focus, retrySec);
+            APP.store.dispatch(showNotification({
+                descriptionKey: focus,
+                titleKey: retrySec
+            }, NOTIFICATION_TIMEOUT_TYPE.SHORT));
             break;
         }
 
@@ -754,7 +750,7 @@ export default {
             APP.store.dispatch(showNotification({
                 descriptionKey: 'notify.startSilentDescription',
                 titleKey: 'notify.startSilentTitle'
-            }));
+            }, NOTIFICATION_TIMEOUT_TYPE.LONG));
         }
 
         // XXX The API will take care of disconnecting from the XMPP
@@ -1211,14 +1207,6 @@ export default {
     },
 
     /**
-     * Obtains the local display name.
-     * @returns {string|undefined}
-     */
-    getLocalDisplayName() {
-        return getDisplayName(this.getMyUserId());
-    },
-
-    /**
      * Finds JitsiParticipant for given id.
      *
      * @param {string} id participant's identifier(MUC nickname).
@@ -1228,29 +1216,6 @@ export default {
      */
     getParticipantById(id) {
         return room ? room.getParticipantById(id) : null;
-    },
-
-    /**
-     * Gets the display name foe the <tt>JitsiParticipant</tt> identified by
-     * the given <tt>id</tt>.
-     *
-     * @param id {string} the participant's id(MUC nickname/JVB endpoint id)
-     *
-     * @return {string} the participant's display name or the default string if
-     * absent.
-     */
-    getParticipantDisplayName(id) {
-        const displayName = getDisplayName(id);
-
-        if (displayName) {
-            return displayName;
-        }
-        if (APP.conference.isLocalId(id)) {
-            return APP.translation.generateTranslationHTML(
-                    interfaceConfig.DEFAULT_LOCAL_DISPLAY_NAME);
-        }
-
-        return interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME;
     },
 
     getMyUserId() {
@@ -1360,11 +1325,49 @@ export default {
         }
     },
 
-    _createRoom(localTracks) {
+    /**
+     * Used by the Breakout Rooms feature to join a breakout room or go back to the main room.
+     */
+    async joinRoom(roomName, isBreakoutRoom = false) {
+        this.roomName = roomName;
+
+        const { tryCreateLocalTracks, errors } = this.createInitialLocalTracks();
+        const localTracks = await tryCreateLocalTracks;
+
+        this._displayErrorsForCreateInitialLocalTracks(errors);
+        localTracks.forEach(track => {
+            if ((track.isAudioTrack() && this.isLocalAudioMuted())
+                || (track.isVideoTrack() && this.isLocalVideoMuted())) {
+                track.mute();
+            }
+        });
+        this._createRoom(localTracks, isBreakoutRoom);
+
+        return new Promise((resolve, reject) => {
+            new ConferenceConnector(resolve, reject).connect();
+        });
+    },
+
+    _createRoom(localTracks, isBreakoutRoom = false) {
+        const extraOptions = {};
+
+        if (isBreakoutRoom) {
+            // We must be in a room already.
+            if (!room?.xmpp?.breakoutRoomsComponentAddress) {
+                throw new Error('Breakout Rooms not enabled');
+            }
+
+            // TODO: re-evaluate this. -saghul
+            extraOptions.customDomain = room.xmpp.breakoutRoomsComponentAddress;
+        }
+
         room
             = connection.initJitsiConference(
                 APP.conference.roomName,
-                this._getConferenceOptions());
+                {
+                    ...this._getConferenceOptions(),
+                    ...extraOptions
+                });
 
         // Filter out the tracks that are muted (except on Safari).
         const tracks = browser.isWebKitBased() ? localTracks : localTracks.filter(track => !track.isMuted());
@@ -2176,6 +2179,10 @@ export default {
             (id, displayName) => {
                 const formattedDisplayName
                     = getNormalizedDisplayName(displayName);
+                const state = APP.store.getState();
+                const {
+                    defaultRemoteDisplayName
+                } = state['features/base/config'];
 
                 APP.store.dispatch(participantUpdated({
                     conference: room,
@@ -2187,7 +2194,7 @@ export default {
                     formattedDisplayName:
                         appendSuffix(
                             formattedDisplayName
-                                || interfaceConfig.DEFAULT_REMOTE_DISPLAY_NAME)
+                                || defaultRemoteDisplayName)
                 });
             }
         );
@@ -2221,6 +2228,10 @@ export default {
                     }
                 }
             });
+
+        room.on(
+            JitsiConferenceEvents.NON_PARTICIPANT_MESSAGE_RECEIVED,
+            (...args) => APP.store.dispatch(nonParticipantMessageReceived(...args)));
 
         room.on(
             JitsiConferenceEvents.LOCK_STATE_CHANGED,
@@ -2321,7 +2332,12 @@ export default {
             }
 
             Promise.allSettled(promises)
-                .then(() => APP.UI.notifyInitiallyMuted());
+                .then(() => {
+                    APP.store.dispatch(showNotification({
+                        titleKey: 'notify.mutedTitle',
+                        descriptionKey: 'notify.muted'
+                    }, NOTIFICATION_TIMEOUT_TYPE.SHORT));
+                });
         });
 
         room.on(
@@ -2902,6 +2918,17 @@ export default {
             }
             APP.store.dispatch(maybeRedirectToWelcomePage(values[0]));
         });
+    },
+
+    /**
+     * Leaves the room.
+     *
+     * @returns {Promise}
+     */
+    leaveRoom() {
+        if (room && room.isJoined()) {
+            return room.leave();
+        }
     },
 
     /**
